@@ -1,6 +1,9 @@
 import java.io.File;
 import java.io.FileNotFoundException;
 import java.util.Scanner;
+import java.time.LocalDateTime;
+import java.time.format.DateTimeFormatter;
+import java.time.temporal.ChronoUnit;
 
 
 
@@ -13,6 +16,9 @@ public class LogForge {
     private static final int message_field_index = 4;
     private static final int timestamp_length = 19;
     private static final int initial_capacity = 5;
+    private static final int incident_window_seconds = 60;
+    private static final int incident_min_errors = 3;
+    private static final DateTimeFormatter timestamp_formatter = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss");
     
     public static void main(String[] args) {
         if(args.length < 1){
@@ -32,6 +38,17 @@ public class LogForge {
 
         ServiceStats[] serviceStats = new ServiceStats[initial_capacity];
         int serviceCount = 0;
+
+        // Q6: per-service "current group" tracking, updated as ERROR
+        // records are encountered in chronological order
+        String[] trackServiceNames = new String[initial_capacity];
+        String[] groupFirstTimestamp = new String[initial_capacity];
+        String[] groupLastTimestamp = new String[initial_capacity];
+        int[] groupCount = new int[initial_capacity];
+        int trackCount = 0;
+
+        Incident[] incidents = new Incident[initial_capacity];
+        int incidentCount = 0;
 
         Scanner fileScanner = null;
         try {
@@ -74,6 +91,47 @@ public class LogForge {
                 if(level.equals("INFO")) infoCount++;
                 else if(level.equals("WARN")) warnCount++;
                 else if(level.equals("ERROR")) errorCount++;
+
+                // Q6: fold this record into the running per-service
+                // incident grouping, but only ERROR records matter
+                if (level.equals("ERROR")) {
+                    int trackIndex = findTrackIndex(trackServiceNames, trackCount, service);
+
+                    if (trackIndex == -1) {
+                        if (trackCount == trackServiceNames.length) {
+                            trackServiceNames = growStringArray(trackServiceNames);
+                            groupFirstTimestamp = growStringArray(groupFirstTimestamp);
+                            groupLastTimestamp = growStringArray(groupLastTimestamp);
+                            groupCount = growIntArray(groupCount);
+                        }
+                        trackServiceNames[trackCount] = service;
+                        groupFirstTimestamp[trackCount] = timestamp;
+                        groupLastTimestamp[trackCount] = timestamp;
+                        groupCount[trackCount] = 1;
+                        trackCount++;
+                    } else {
+                        LocalDateTime groupFirstTime = LocalDateTime.parse(groupFirstTimestamp[trackIndex], timestamp_formatter);
+                        LocalDateTime currentTime = LocalDateTime.parse(timestamp, timestamp_formatter);
+                        long secondsFromGroupStart = ChronoUnit.SECONDS.between(groupFirstTime, currentTime);
+
+                        if (secondsFromGroupStart <= incident_window_seconds) {
+                            groupCount[trackIndex]++;
+                            groupLastTimestamp[trackIndex] = timestamp;
+                        } else {
+                            if (groupCount[trackIndex] >= incident_min_errors) {
+                                if (incidentCount == incidents.length) {
+                                    incidents = growIncidentArray(incidents);
+                                }
+                                incidents[incidentCount] = new Incident(trackServiceNames[trackIndex],
+                                        groupFirstTimestamp[trackIndex], groupLastTimestamp[trackIndex]);
+                                incidentCount++;
+                            }
+                            groupFirstTimestamp[trackIndex] = timestamp;
+                            groupLastTimestamp[trackIndex] = timestamp;
+                            groupCount[trackIndex] = 1;
+                        }
+                    }
+                }
             }
         
         } 
@@ -86,6 +144,17 @@ public class LogForge {
                 fileScanner.close();
             }
         }        
+
+        // Q6: flush any groups still open at end of file
+        for (int i = 0; i < trackCount; i++) {
+            if (groupCount[i] >= incident_min_errors) {
+                if (incidentCount == incidents.length) {
+                    incidents = growIncidentArray(incidents);
+                }
+                incidents[incidentCount] = new Incident(trackServiceNames[i], groupFirstTimestamp[i], groupLastTimestamp[i]);
+                incidentCount++;
+            }
+        }
         
         System.out.println("Total lines: " + totalLines);
         System.out.println("Valid records: " + validRecords);
@@ -94,7 +163,7 @@ public class LogForge {
         System.out.println("INFO: " + infoCount);
         System.out.println("WARN: " + warnCount);
         System.out.println("ERROR: " + errorCount);
-        System.out.println();
+
         sortServicesByErrorRateDescending(serviceStats, serviceCount);
 
         System.out.println();
@@ -105,75 +174,19 @@ public class LogForge {
                     + " errors=" + s.getErrorCount()
                     + " errorRate=" + s.getErrorRatePercentString());
         }
-    }
 
-    // Q5: sorts services by error rate descending, ties broken by
-    // ascending alphabetical order, using radix sort as required.
-    private static void sortServicesByErrorRateDescending(ServiceStats[] arr, int count) {
-        // pre-sort alphabetically so radix sort's stability preserves
-        // this order among services that end up with equal error rates
-        sortServicesByNameAscending(arr, count);
-
-        int[] keys = new int[count];
-        for (int i = 0; i < count; i++) {
-            // invert the key so an ascending radix sort produces a
-            // descending error-rate ordering
-            keys[i] = 10000 - arr[i].getErrorRateScaledKey();
-        }
-
-        int[] placeValues = {1, 10, 100, 1000, 10000};
-        for (int p = 0; p < placeValues.length; p++) {
-            radixCountingSortPass(arr, keys, count, placeValues[p]);
-        }
-    }
-
-    // Selection sort by service name ascending. Not bubble sort, not a
-    // library sort - allowed under the assignment's restrictions.
-    private static void sortServicesByNameAscending(ServiceStats[] arr, int count) {
-        for (int i = 0; i < count - 1; i++) {
-            int minIndex = i;
-            for (int j = i + 1; j < count; j++) {
-                if (arr[j].getServiceName().compareTo(arr[minIndex].getServiceName()) < 0) {
-                    minIndex = j;
-                }
+        System.out.println();
+        System.out.println("INCIDENTS");
+        if (incidentCount == 0) {
+            System.out.println("No incidents detected.");
+        } else {
+            for (int i = 0; i < incidentCount; i++) {
+                Incident inc = incidents[i];
+                System.out.println("Service: " + inc.getServiceName());
+                System.out.println("First Error: " + inc.getFirstErrorTimestamp());
+                System.out.println("Last Error: " + inc.getLastErrorTimestamp());
+                System.out.println();
             }
-            if (minIndex != i) {
-                ServiceStats temp_swap_buffer = arr[i];
-                arr[i] = arr[minIndex];
-                arr[minIndex] = temp_swap_buffer;
-            }
-        }
-    }
-
-    // One stable counting-sort pass over a single decimal digit, per
-    // the LSD radix sort algorithm. Bucket array is allocated at size
-    // 12 as required; only indices 0-9 are ever used.
-    private static void radixCountingSortPass(ServiceStats[] arr, int[] keys, int count, int placeValue) {
-        int[] counts = new int[12];
-
-        for (int i = 0; i < count; i++) {
-            int digit = (keys[i] / placeValue) % 10;
-            counts[digit]++;
-        }
-        for (int d = 1; d < 10; d++) {
-            counts[d] += counts[d - 1];
-        }
-
-        ServiceStats[] output = new ServiceStats[count];
-        int[] keyOutput = new int[count];
-
-        for (int i = count - 1; i >= 0; i--) {
-            int digit = (keys[i] / placeValue) % 10;
-            int position = counts[digit] - 1;
-            ServiceStats temp_swap_buffer = arr[i];
-            output[position] = temp_swap_buffer;
-            keyOutput[position] = keys[i];
-            counts[digit]--;
-        }
-
-        for (int i = 0; i < count; i++) {
-            arr[i] = output[i];
-            keys[i] = keyOutput[i];
         }
     }
 
@@ -195,10 +208,47 @@ public class LogForge {
         return newArray;
     }
 
+    // Doubles capacity and manually copies existing Incident elements over
+    private static Incident[] growIncidentArray(Incident[] array) {
+        Incident[] newArray = new Incident[array.length * 2];
+        for (int i = 0; i < array.length; i++) {
+            newArray[i] = array[i];
+        }
+        return newArray;
+    }
+
+    // Doubles capacity and manually copies existing String elements over
+    private static String[] growStringArray(String[] array) {
+        String[] newArray = new String[array.length * 2];
+        for (int i = 0; i < array.length; i++) {
+            newArray[i] = array[i];
+        }
+        return newArray;
+    }
+
+    // Doubles capacity and manually copies existing int elements over
+    private static int[] growIntArray(int[] array) {
+        int[] newArray = new int[array.length * 2];
+        for (int i = 0; i < array.length; i++) {
+            newArray[i] = array[i];
+        }
+        return newArray;
+    }
+
     // Manual linear search for an existing service; -1 if not found yet
     private static int findServiceIndex(ServiceStats[] array, int count, String serviceName) {
         for (int i = 0; i < count; i++) {
             if (array[i].matchesService(serviceName)) {
+                return i;
+            }
+        }
+        return -1;
+    }
+
+    // Manual linear search over the Q6 incident-tracking service names
+    private static int findTrackIndex(String[] array, int count, String serviceName) {
+        for (int i = 0; i < count; i++) {
+            if (array[i].equals(serviceName)) {
                 return i;
             }
         }
@@ -287,5 +337,71 @@ public class LogForge {
 
         int month = (timestamp.charAt(5) - '0') * 10 + (timestamp.charAt(6) - '0');
         return month >= 1 && month <= 12;
+    }
+
+    // Q5: sorts services by error rate descending, ties broken by
+    // ascending alphabetical order, using radix sort as required.
+    private static void sortServicesByErrorRateDescending(ServiceStats[] arr, int count) {
+        sortServicesByNameAscending(arr, count);
+
+        int[] keys = new int[count];
+        for (int i = 0; i < count; i++) {
+            keys[i] = 10000 - arr[i].getErrorRateScaledKey();
+        }
+
+        int[] placeValues = {1, 10, 100, 1000, 10000};
+        for (int p = 0; p < placeValues.length; p++) {
+            radixCountingSortPass(arr, keys, count, placeValues[p]);
+        }
+    }
+
+    // Selection sort by service name ascending. Not bubble sort, not a
+    // library sort - allowed under the assignment's restrictions.
+    private static void sortServicesByNameAscending(ServiceStats[] arr, int count) {
+        for (int i = 0; i < count - 1; i++) {
+            int minIndex = i;
+            for (int j = i + 1; j < count; j++) {
+                if (arr[j].getServiceName().compareTo(arr[minIndex].getServiceName()) < 0) {
+                    minIndex = j;
+                }
+            }
+            if (minIndex != i) {
+                ServiceStats temp_swap_buffer = arr[i];
+                arr[i] = arr[minIndex];
+                arr[minIndex] = temp_swap_buffer;
+            }
+        }
+    }
+
+    // One stable counting-sort pass over a single decimal digit, per
+    // the LSD radix sort algorithm. Bucket array is allocated at size
+    // 12 as required; only indices 0-9 are ever used.
+    private static void radixCountingSortPass(ServiceStats[] arr, int[] keys, int count, int placeValue) {
+        int[] counts = new int[12];
+
+        for (int i = 0; i < count; i++) {
+            int digit = (keys[i] / placeValue) % 10;
+            counts[digit]++;
+        }
+        for (int d = 1; d < 10; d++) {
+            counts[d] += counts[d - 1];
+        }
+
+        ServiceStats[] output = new ServiceStats[count];
+        int[] keyOutput = new int[count];
+
+        for (int i = count - 1; i >= 0; i--) {
+            int digit = (keys[i] / placeValue) % 10;
+            int position = counts[digit] - 1;
+            ServiceStats temp_swap_buffer = arr[i];
+            output[position] = temp_swap_buffer;
+            keyOutput[position] = keys[i];
+            counts[digit]--;
+        }
+
+        for (int i = 0; i < count; i++) {
+            arr[i] = output[i];
+            keys[i] = keyOutput[i];
+        }
     }
 }
