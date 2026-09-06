@@ -30,6 +30,9 @@ public class LogForge {
         LogEntry[] logEntries = new LogEntry[initial_capacity];
         int entryCount = 0;
 
+        ServiceStats[] serviceStats = new ServiceStats[initial_capacity];
+        int serviceCount = 0;
+
         Scanner fileScanner = null;
         try {
             fileScanner = new Scanner(new File(filename));   
@@ -52,10 +55,21 @@ public class LogForge {
                 String message = fields[message_field_index];
 
                 if (entryCount == logEntries.length) {
-                    logEntries = growArray(logEntries);
+                    logEntries = growEntryArray(logEntries);
                 }
                 logEntries[entryCount] = new LogEntry(timestamp, service, level, requestId, message);
                 entryCount++;
+
+                int serviceIndex = findServiceIndex(serviceStats, serviceCount, service);
+                if (serviceIndex == -1) {
+                    if (serviceCount == serviceStats.length) {
+                        serviceStats = growServiceArray(serviceStats);
+                    }
+                    serviceStats[serviceCount] = new ServiceStats(service);
+                    serviceIndex = serviceCount;
+                    serviceCount++;
+                }
+                serviceStats[serviceIndex].addRecord(level);
 
                 if(level.equals("INFO")) infoCount++;
                 else if(level.equals("WARN")) warnCount++;
@@ -80,15 +94,43 @@ public class LogForge {
         System.out.println("INFO: " + infoCount);
         System.out.println("WARN: " + warnCount);
         System.out.println("ERROR: " + errorCount);
+        System.out.println();
+        System.out.println("SERVICE STATISTICS (unsorted - Q5 adds ordering)");
+        for (int i = 0; i < serviceCount; i++) {
+            ServiceStats s = serviceStats[i];
+            System.out.println(s.getServiceName() + " total=" + s.getTotal()
+                    + " info=" + s.getInfoCount()
+                    + " warn=" + s.getWarnCount()
+                    + " error=" + s.getErrorCount());
+        }
     }
 
-    // Doubles the array's capacity and manually copies existing elements over
-    private static LogEntry[] growArray(LogEntry[] array) {
+    // Doubles capacity and manually copies existing LogEntry elements over
+    private static LogEntry[] growEntryArray(LogEntry[] array) {
         LogEntry[] newArray = new LogEntry[array.length * 2];
         for (int i = 0; i < array.length; i++) {
             newArray[i] = array[i];
         }
         return newArray;
+    }
+
+    // Doubles capacity and manually copies existing ServiceStats elements over
+    private static ServiceStats[] growServiceArray(ServiceStats[] array) {
+        ServiceStats[] newArray = new ServiceStats[array.length * 2];
+        for (int i = 0; i < array.length; i++) {
+            newArray[i] = array[i];
+        }
+        return newArray;
+    }
+
+    // Manual linear search for an existing service; -1 if not found yet
+    private static int findServiceIndex(ServiceStats[] array, int count, String serviceName) {
+        for (int i = 0; i < count; i++) {
+            if (array[i].matchesService(serviceName)) {
+                return i;
+            }
+        }
+        return -1;
     }
 
     private static String[] splitFields(String line) {
