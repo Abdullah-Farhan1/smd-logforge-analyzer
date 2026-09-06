@@ -95,13 +95,85 @@ public class LogForge {
         System.out.println("WARN: " + warnCount);
         System.out.println("ERROR: " + errorCount);
         System.out.println();
-        System.out.println("SERVICE STATISTICS (unsorted - Q5 adds ordering)");
+        sortServicesByErrorRateDescending(serviceStats, serviceCount);
+
+        System.out.println();
+        System.out.println("SERVICE STATISTICS");
         for (int i = 0; i < serviceCount; i++) {
             ServiceStats s = serviceStats[i];
             System.out.println(s.getServiceName() + " total=" + s.getTotal()
-                    + " info=" + s.getInfoCount()
-                    + " warn=" + s.getWarnCount()
-                    + " error=" + s.getErrorCount());
+                    + " errors=" + s.getErrorCount()
+                    + " errorRate=" + s.getErrorRatePercentString());
+        }
+    }
+
+    // Q5: sorts services by error rate descending, ties broken by
+    // ascending alphabetical order, using radix sort as required.
+    private static void sortServicesByErrorRateDescending(ServiceStats[] arr, int count) {
+        // pre-sort alphabetically so radix sort's stability preserves
+        // this order among services that end up with equal error rates
+        sortServicesByNameAscending(arr, count);
+
+        int[] keys = new int[count];
+        for (int i = 0; i < count; i++) {
+            // invert the key so an ascending radix sort produces a
+            // descending error-rate ordering
+            keys[i] = 10000 - arr[i].getErrorRateScaledKey();
+        }
+
+        int[] placeValues = {1, 10, 100, 1000, 10000};
+        for (int p = 0; p < placeValues.length; p++) {
+            radixCountingSortPass(arr, keys, count, placeValues[p]);
+        }
+    }
+
+    // Selection sort by service name ascending. Not bubble sort, not a
+    // library sort - allowed under the assignment's restrictions.
+    private static void sortServicesByNameAscending(ServiceStats[] arr, int count) {
+        for (int i = 0; i < count - 1; i++) {
+            int minIndex = i;
+            for (int j = i + 1; j < count; j++) {
+                if (arr[j].getServiceName().compareTo(arr[minIndex].getServiceName()) < 0) {
+                    minIndex = j;
+                }
+            }
+            if (minIndex != i) {
+                ServiceStats temp_swap_buffer = arr[i];
+                arr[i] = arr[minIndex];
+                arr[minIndex] = temp_swap_buffer;
+            }
+        }
+    }
+
+    // One stable counting-sort pass over a single decimal digit, per
+    // the LSD radix sort algorithm. Bucket array is allocated at size
+    // 12 as required; only indices 0-9 are ever used.
+    private static void radixCountingSortPass(ServiceStats[] arr, int[] keys, int count, int placeValue) {
+        int[] counts = new int[12];
+
+        for (int i = 0; i < count; i++) {
+            int digit = (keys[i] / placeValue) % 10;
+            counts[digit]++;
+        }
+        for (int d = 1; d < 10; d++) {
+            counts[d] += counts[d - 1];
+        }
+
+        ServiceStats[] output = new ServiceStats[count];
+        int[] keyOutput = new int[count];
+
+        for (int i = count - 1; i >= 0; i--) {
+            int digit = (keys[i] / placeValue) % 10;
+            int position = counts[digit] - 1;
+            ServiceStats temp_swap_buffer = arr[i];
+            output[position] = temp_swap_buffer;
+            keyOutput[position] = keys[i];
+            counts[digit]--;
+        }
+
+        for (int i = 0; i < count; i++) {
+            arr[i] = output[i];
+            keys[i] = keyOutput[i];
         }
     }
 

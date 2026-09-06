@@ -44,4 +44,20 @@ public class ServiceStats {
         else if (level.equals("WARN")) warnCount++;
         else if (level.equals("ERROR")) errorCount++;
     }
+
+        // Q5: error rate as a percentage scaled by 100 so 2 decimal places
+    // are baked into the integer (e.g. 50.00% is stored as 5000).
+    // Uses round-half-up integer arithmetic - no floating point.
+    public int getErrorRateScaledKey() {
+        return (errorCount * 20000 + total) / (total * 2);
+    }
+
+    // Turns the scaled key back into a display string like "50.00%"
+    public String getErrorRatePercentString() {
+        int scaledKey = getErrorRateScaledKey();
+        int wholePart = scaledKey / 100;
+        int fracPart = scaledKey % 100;
+        String fracStr = (fracPart < 10) ? ("0" + fracPart) : ("" + fracPart);
+        return wholePart + "." + fracStr + "%";
+    }
 }
