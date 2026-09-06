@@ -5,8 +5,6 @@ import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.time.temporal.ChronoUnit;
 
-
-
 public class LogForge {
     private static final int field_count = 5;
     private static final int timestamp_field_index = 0;
@@ -19,9 +17,9 @@ public class LogForge {
     private static final int incident_window_seconds = 60;
     private static final int incident_min_errors = 3;
     private static final DateTimeFormatter timestamp_formatter = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss");
-    
+
     public static void main(String[] args) {
-        if(args.length < 1){
+        if (args.length < 1) {
             System.out.println("Usage: java LogForge <logfile>");
             return;
         }
@@ -50,16 +48,19 @@ public class LogForge {
         Incident[] incidents = new Incident[initial_capacity];
         int incidentCount = 0;
 
+        RequestStats[] requestStats = new RequestStats[initial_capacity];
+        int requestCount = 0;
+
         Scanner fileScanner = null;
         try {
-            fileScanner = new Scanner(new File(filename));   
-            
-            while (fileScanner.hasNextLine()){
+            fileScanner = new Scanner(new File(filename));
+
+            while (fileScanner.hasNextLine()) {
                 String line = fileScanner.nextLine();
                 totalLines++;
                 String[] fields = splitFields(line);
 
-                if(fields == null || !isValidRecord(fields)){
+                if (fields == null || !isValidRecord(fields)) {
                     invalidRecords++;
                     continue;
                 }
@@ -88,9 +89,20 @@ public class LogForge {
                 }
                 serviceStats[serviceIndex].addRecord(level);
 
-                if(level.equals("INFO")) infoCount++;
-                else if(level.equals("WARN")) warnCount++;
-                else if(level.equals("ERROR")) errorCount++;
+                int requestIndex = findRequestIndex(requestStats, requestCount, requestId);
+                if (requestIndex == -1) {
+                    if (requestCount == requestStats.length) {
+                        requestStats = growRequestArray(requestStats);
+                    }
+                    requestStats[requestCount] = new RequestStats(requestId);
+                    requestIndex = requestCount;
+                    requestCount++;
+                }
+                requestStats[requestIndex].addRecord(service, level);
+
+                if (level.equals("INFO")) infoCount++;
+                else if (level.equals("WARN")) warnCount++;
+                else if (level.equals("ERROR")) errorCount++;
 
                 // Q6: fold this record into the running per-service
                 // incident grouping, but only ERROR records matter
@@ -133,17 +145,15 @@ public class LogForge {
                     }
                 }
             }
-        
-        } 
-        catch (FileNotFoundException e){
-                System.err.println("Error: could not open file '"+filename+"'");
-                return;
-        } 
-        finally {
-            if(fileScanner != null){
+
+        } catch (FileNotFoundException e) {
+            System.err.println("Error: could not open file '" + filename + "'");
+            return;
+        } finally {
+            if (fileScanner != null) {
                 fileScanner.close();
             }
-        }        
+        }
 
         // Q6: flush any groups still open at end of file
         for (int i = 0; i < trackCount; i++) {
@@ -155,7 +165,7 @@ public class LogForge {
                 incidentCount++;
             }
         }
-        
+
         System.out.println("Total lines: " + totalLines);
         System.out.println("Valid records: " + validRecords);
         System.out.println("Invalid records: " + invalidRecords);
@@ -176,6 +186,17 @@ public class LogForge {
         }
 
         System.out.println();
+        System.out.println("REQUEST STATISTICS");
+        for (int i = 0; i < requestCount; i++) {
+            RequestStats r = requestStats[i];
+            String status = r.isFailed() ? "FAILED" : "SUCCESS";
+            System.out.println("Request " + r.getRequestId() + ": " + status);
+            System.out.println("Records: " + r.getTotalRecords());
+            System.out.println("Errors: " + r.getErrorCount());
+            System.out.println("Services: " + r.getServicesString());
+            System.out.println();
+        }
+
         System.out.println("INCIDENTS");
         if (incidentCount == 0) {
             System.out.println("No incidents detected.");
@@ -188,6 +209,25 @@ public class LogForge {
                 System.out.println();
             }
         }
+    }
+
+    // Doubles capacity and manually copies existing RequestStats elements over
+    private static RequestStats[] growRequestArray(RequestStats[] array) {
+        RequestStats[] newArray = new RequestStats[array.length * 2];
+        for (int i = 0; i < array.length; i++) {
+            newArray[i] = array[i];
+        }
+        return newArray;
+    }
+
+    // Manual linear search for an existing request by ID; -1 if new
+    private static int findRequestIndex(RequestStats[] array, int count, int requestId) {
+        for (int i = 0; i < count; i++) {
+            if (array[i].matchesRequest(requestId)) {
+                return i;
+            }
+        }
+        return -1;
     }
 
     // Doubles capacity and manually copies existing LogEntry elements over
