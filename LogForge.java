@@ -37,8 +37,6 @@ public class LogForge {
         ServiceStats[] serviceStats = new ServiceStats[initial_capacity];
         int serviceCount = 0;
 
-        // Q6: per-service "current group" tracking, updated as ERROR
-        // records are encountered in chronological order
         String[] trackServiceNames = new String[initial_capacity];
         String[] groupFirstTimestamp = new String[initial_capacity];
         String[] groupLastTimestamp = new String[initial_capacity];
@@ -55,6 +53,9 @@ public class LogForge {
         try {
             fileScanner = new Scanner(new File(filename));
 
+            // ==========================================
+            // PHASE 1: READ, VALIDATE, AND STORE
+            // ==========================================
             while (fileScanner.hasNextLine()) {
                 String line = fileScanner.nextLine();
                 totalLines++;
@@ -77,81 +78,101 @@ public class LogForge {
                 }
                 logEntries[entryCount] = new LogEntry(timestamp, service, level, requestId, message);
                 entryCount++;
-
-                int serviceIndex = findServiceIndex(serviceStats, serviceCount, service);
-                if (serviceIndex == -1) {
-                    if (serviceCount == serviceStats.length) {
-                        serviceStats = growServiceArray(serviceStats);
-                    }
-                    serviceStats[serviceCount] = new ServiceStats(service);
-                    serviceIndex = serviceCount;
-                    serviceCount++;
-                }
-                serviceStats[serviceIndex].addRecord(level);
-
-                int requestIndex = findRequestIndex(requestStats, requestCount, requestId);
-                if (requestIndex == -1) {
-                    if (requestCount == requestStats.length) {
-                        requestStats = growRequestArray(requestStats);
-                    }
-                    requestStats[requestCount] = new RequestStats(requestId);
-                    requestIndex = requestCount;
-                    requestCount++;
-                }
-                requestStats[requestIndex].addRecord(service, level);
-
-                if (level.equals("INFO")) infoCount++;
-                else if (level.equals("WARN")) warnCount++;
-                else if (level.equals("ERROR")) errorCount++;
-
-                // Q6: fold this record into the running per-service
-                // incident grouping, but only ERROR records matter
-                if (level.equals("ERROR")) {
-                    int trackIndex = findTrackIndex(trackServiceNames, trackCount, service);
-
-                    if (trackIndex == -1) {
-                        if (trackCount == trackServiceNames.length) {
-                            trackServiceNames = growStringArray(trackServiceNames);
-                            groupFirstTimestamp = growStringArray(groupFirstTimestamp);
-                            groupLastTimestamp = growStringArray(groupLastTimestamp);
-                            groupCount = growIntArray(groupCount);
-                        }
-                        trackServiceNames[trackCount] = service;
-                        groupFirstTimestamp[trackCount] = timestamp;
-                        groupLastTimestamp[trackCount] = timestamp;
-                        groupCount[trackCount] = 1;
-                        trackCount++;
-                    } else {
-                        LocalDateTime groupFirstTime = LocalDateTime.parse(groupFirstTimestamp[trackIndex], timestamp_formatter);
-                        LocalDateTime currentTime = LocalDateTime.parse(timestamp, timestamp_formatter);
-                        long secondsFromGroupStart = ChronoUnit.SECONDS.between(groupFirstTime, currentTime);
-
-                        if (secondsFromGroupStart <= incident_window_seconds) {
-                            groupCount[trackIndex]++;
-                            groupLastTimestamp[trackIndex] = timestamp;
-                        } else {
-                            if (groupCount[trackIndex] >= incident_min_errors) {
-                                if (incidentCount == incidents.length) {
-                                    incidents = growIncidentArray(incidents);
-                                }
-                                incidents[incidentCount] = new Incident(trackServiceNames[trackIndex],
-                                        groupFirstTimestamp[trackIndex], groupLastTimestamp[trackIndex]);
-                                incidentCount++;
-                            }
-                            groupFirstTimestamp[trackIndex] = timestamp;
-                            groupLastTimestamp[trackIndex] = timestamp;
-                            groupCount[trackIndex] = 1;
-                        }
-                    }
-                }
             }
-
         } catch (FileNotFoundException e) {
             System.err.println("Error: could not open file '" + filename + "'");
             return;
         } finally {
             if (fileScanner != null) {
                 fileScanner.close();
+            }
+        }
+
+        // ==========================================
+        // PHASE 2: SORTING (Q8)
+        // ==========================================
+        for (int i = 1; i < entryCount; i++) {
+            for (int j = i; j > 0 && logEntries[j - 1].getTimestamp().compareTo(logEntries[j].getTimestamp()) >= 0; j--) {
+                LogEntry temp_swap_buffer = logEntries[j];
+                logEntries[j] = logEntries[j - 1];
+                logEntries[j - 1] = temp_swap_buffer;
+            }
+        }
+
+        // ==========================================
+        // PHASE 3: ANALYSIS ON SORTED ARRAY (Q4-Q7)
+        // ==========================================
+        for (int i = 0; i < entryCount; i++) {
+            LogEntry entry = logEntries[i];
+
+            String timestamp = entry.getTimestamp();
+            String service = entry.getService();
+            String level = entry.getLevel();
+            int requestId = entry.getRequestId();
+
+            if (level.equals("INFO")) infoCount++;
+            else if (level.equals("WARN")) warnCount++;
+            else if (level.equals("ERROR")) errorCount++;
+
+            int serviceIndex = findServiceIndex(serviceStats, serviceCount, service);
+            if (serviceIndex == -1) {
+                if (serviceCount == serviceStats.length) {
+                    serviceStats = growServiceArray(serviceStats);
+                }
+                serviceStats[serviceCount] = new ServiceStats(service);
+                serviceIndex = serviceCount;
+                serviceCount++;
+            }
+            serviceStats[serviceIndex].addRecord(level);
+
+            int requestIndex = findRequestIndex(requestStats, requestCount, requestId);
+            if (requestIndex == -1) {
+                if (requestCount == requestStats.length) {
+                    requestStats = growRequestArray(requestStats);
+                }
+                requestStats[requestCount] = new RequestStats(requestId);
+                requestIndex = requestCount;
+                requestCount++;
+            }
+            requestStats[requestIndex].addRecord(service, level);
+
+            if (level.equals("ERROR")) {
+                int trackIndex = findTrackIndex(trackServiceNames, trackCount, service);
+
+                if (trackIndex == -1) {
+                    if (trackCount == trackServiceNames.length) {
+                        trackServiceNames = growStringArray(trackServiceNames);
+                        groupFirstTimestamp = growStringArray(groupFirstTimestamp);
+                        groupLastTimestamp = growStringArray(groupLastTimestamp);
+                        groupCount = growIntArray(groupCount);
+                    }
+                    trackServiceNames[trackCount] = service;
+                    groupFirstTimestamp[trackCount] = timestamp;
+                    groupLastTimestamp[trackCount] = timestamp;
+                    groupCount[trackCount] = 1;
+                    trackCount++;
+                } else {
+                    LocalDateTime groupFirstTime = LocalDateTime.parse(groupFirstTimestamp[trackIndex], timestamp_formatter);
+                    LocalDateTime currentTime = LocalDateTime.parse(timestamp, timestamp_formatter);
+                    long secondsFromGroupStart = ChronoUnit.SECONDS.between(groupFirstTime, currentTime);
+
+                    if (secondsFromGroupStart <= incident_window_seconds) {
+                        groupCount[trackIndex]++;
+                        groupLastTimestamp[trackIndex] = timestamp;
+                    } else {
+                        if (groupCount[trackIndex] >= incident_min_errors) {
+                            if (incidentCount == incidents.length) {
+                                incidents = growIncidentArray(incidents);
+                            }
+                            incidents[incidentCount] = new Incident(trackServiceNames[trackIndex],
+                                    groupFirstTimestamp[trackIndex], groupLastTimestamp[trackIndex]);
+                            incidentCount++;
+                        }
+                        groupFirstTimestamp[trackIndex] = timestamp;
+                        groupLastTimestamp[trackIndex] = timestamp;
+                        groupCount[trackIndex] = 1;
+                    }
+                }
             }
         }
 
@@ -211,7 +232,6 @@ public class LogForge {
         }
     }
 
-    // Doubles capacity and manually copies existing RequestStats elements over
     private static RequestStats[] growRequestArray(RequestStats[] array) {
         RequestStats[] newArray = new RequestStats[array.length * 2];
         for (int i = 0; i < array.length; i++) {
@@ -220,7 +240,6 @@ public class LogForge {
         return newArray;
     }
 
-    // Manual linear search for an existing request by ID; -1 if new
     private static int findRequestIndex(RequestStats[] array, int count, int requestId) {
         for (int i = 0; i < count; i++) {
             if (array[i].matchesRequest(requestId)) {
@@ -230,7 +249,6 @@ public class LogForge {
         return -1;
     }
 
-    // Doubles capacity and manually copies existing LogEntry elements over
     private static LogEntry[] growEntryArray(LogEntry[] array) {
         LogEntry[] newArray = new LogEntry[array.length * 2];
         for (int i = 0; i < array.length; i++) {
@@ -239,7 +257,6 @@ public class LogForge {
         return newArray;
     }
 
-    // Doubles capacity and manually copies existing ServiceStats elements over
     private static ServiceStats[] growServiceArray(ServiceStats[] array) {
         ServiceStats[] newArray = new ServiceStats[array.length * 2];
         for (int i = 0; i < array.length; i++) {
@@ -248,7 +265,6 @@ public class LogForge {
         return newArray;
     }
 
-    // Doubles capacity and manually copies existing Incident elements over
     private static Incident[] growIncidentArray(Incident[] array) {
         Incident[] newArray = new Incident[array.length * 2];
         for (int i = 0; i < array.length; i++) {
@@ -257,7 +273,6 @@ public class LogForge {
         return newArray;
     }
 
-    // Doubles capacity and manually copies existing String elements over
     private static String[] growStringArray(String[] array) {
         String[] newArray = new String[array.length * 2];
         for (int i = 0; i < array.length; i++) {
@@ -266,7 +281,6 @@ public class LogForge {
         return newArray;
     }
 
-    // Doubles capacity and manually copies existing int elements over
     private static int[] growIntArray(int[] array) {
         int[] newArray = new int[array.length * 2];
         for (int i = 0; i < array.length; i++) {
@@ -275,7 +289,6 @@ public class LogForge {
         return newArray;
     }
 
-    // Manual linear search for an existing service; -1 if not found yet
     private static int findServiceIndex(ServiceStats[] array, int count, String serviceName) {
         for (int i = 0; i < count; i++) {
             if (array[i].matchesService(serviceName)) {
@@ -285,7 +298,6 @@ public class LogForge {
         return -1;
     }
 
-    // Manual linear search over the Q6 incident-tracking service names
     private static int findTrackIndex(String[] array, int count, String serviceName) {
         for (int i = 0; i < count; i++) {
             if (array[i].equals(serviceName)) {
@@ -303,7 +315,6 @@ public class LogForge {
         for (int i = 0; i < line.length(); i++) {
             if (line.charAt(i) == '|') {
                 if (fieldIndex >= field_count - 1) {
-                    // more delimiters than a 5-field line should have
                     return null;
                 }
                 fields[fieldIndex] = line.substring(start, i);
@@ -313,7 +324,6 @@ public class LogForge {
         }
 
         if (fieldIndex != field_count - 1) {
-            // too few delimiters found
             return null;
         }
 
@@ -321,7 +331,6 @@ public class LogForge {
         return fields;
     }
 
-    // Q2: checks level, request ID, and timestamp validity
     private static boolean isValidRecord(String[] fields) {
         String timestamp = fields[timestamp_field_index];
         String level = fields[level_field_index];
@@ -334,7 +343,6 @@ public class LogForge {
         return level.equals("INFO") || level.equals("WARN") || level.equals("ERROR");
     }
 
-    // request ID must be all digits and represent a positive integer
     private static boolean isValidRequestId(String requestId) {
         if (requestId == null || requestId.length() == 0) {
             return false;
@@ -355,7 +363,6 @@ public class LogForge {
         }
     }
 
-    // must be exactly 19 chars: YYYY-MM-DD HH:MM:SS, with month 1-12
     private static boolean isValidTimestamp(String timestamp) {
         if (timestamp == null || timestamp.length() != timestamp_length) {
             return false;
@@ -379,8 +386,6 @@ public class LogForge {
         return month >= 1 && month <= 12;
     }
 
-    // Q5: sorts services by error rate descending, ties broken by
-    // ascending alphabetical order, using radix sort as required.
     private static void sortServicesByErrorRateDescending(ServiceStats[] arr, int count) {
         sortServicesByNameAscending(arr, count);
 
@@ -395,8 +400,6 @@ public class LogForge {
         }
     }
 
-    // Selection sort by service name ascending. Not bubble sort, not a
-    // library sort - allowed under the assignment's restrictions.
     private static void sortServicesByNameAscending(ServiceStats[] arr, int count) {
         for (int i = 0; i < count - 1; i++) {
             int minIndex = i;
@@ -413,9 +416,6 @@ public class LogForge {
         }
     }
 
-    // One stable counting-sort pass over a single decimal digit, per
-    // the LSD radix sort algorithm. Bucket array is allocated at size
-    // 12 as required; only indices 0-9 are ever used.
     private static void radixCountingSortPass(ServiceStats[] arr, int[] keys, int count, int placeValue) {
         int[] counts = new int[12];
 
