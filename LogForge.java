@@ -7,9 +7,12 @@ import java.util.Scanner;
 public class LogForge {
     private static final int field_count = 5;
     private static final int timestamp_field_index = 0;
+    private static final int service_field_index = 1;
     private static final int level_field_index = 2;
     private static final int request_id_field_index = 3;
+    private static final int message_field_index = 4;
     private static final int timestamp_length = 19;
+    private static final int initial_capacity = 5;
     
     public static void main(String[] args) {
         if(args.length < 1){
@@ -23,6 +26,10 @@ public class LogForge {
         int infoCount = 0;
         int warnCount = 0;
         int errorCount = 0;
+
+        LogEntry[] logEntries = new LogEntry[initial_capacity];
+        int entryCount = 0;
+
         Scanner fileScanner = null;
         try {
             fileScanner = new Scanner(new File(filename));   
@@ -37,7 +44,19 @@ public class LogForge {
                     continue;
                 }
                 validRecords++;
+
+                String timestamp = fields[timestamp_field_index];
+                String service = fields[service_field_index];
                 String level = fields[level_field_index];
+                int requestId = Integer.parseInt(fields[request_id_field_index]);
+                String message = fields[message_field_index];
+
+                if (entryCount == logEntries.length) {
+                    logEntries = growArray(logEntries);
+                }
+                logEntries[entryCount] = new LogEntry(timestamp, service, level, requestId, message);
+                entryCount++;
+
                 if(level.equals("INFO")) infoCount++;
                 else if(level.equals("WARN")) warnCount++;
                 else if(level.equals("ERROR")) errorCount++;
@@ -61,6 +80,15 @@ public class LogForge {
         System.out.println("INFO: " + infoCount);
         System.out.println("WARN: " + warnCount);
         System.out.println("ERROR: " + errorCount);
+    }
+
+    // Doubles the array's capacity and manually copies existing elements over
+    private static LogEntry[] growArray(LogEntry[] array) {
+        LogEntry[] newArray = new LogEntry[array.length * 2];
+        for (int i = 0; i < array.length; i++) {
+            newArray[i] = array[i];
+        }
+        return newArray;
     }
 
     private static String[] splitFields(String line) {
