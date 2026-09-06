@@ -4,6 +4,9 @@ import java.util.Scanner;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.time.temporal.ChronoUnit;
+import java.io.FileWriter;
+import java.io.PrintWriter;
+import java.io.IOException;
 
 public class LogForge {
     private static final int field_count = 5;
@@ -24,6 +27,8 @@ public class LogForge {
             return;
         }
         String filename = args[0];
+        String outputFilename = (args.length >= 2) ? args[1] : "logforge_report.txt";
+
         int totalLines = 0;
         int validRecords = 0;
         int invalidRecords = 0;
@@ -187,49 +192,106 @@ public class LogForge {
             }
         }
 
-        System.out.println("Total lines: " + totalLines);
-        System.out.println("Valid records: " + validRecords);
-        System.out.println("Invalid records: " + invalidRecords);
-        System.out.println();
-        System.out.println("INFO: " + infoCount);
-        System.out.println("WARN: " + warnCount);
-        System.out.println("ERROR: " + errorCount);
-
         sortServicesByErrorRateDescending(serviceStats, serviceCount);
 
-        System.out.println();
-        System.out.println("SERVICE STATISTICS");
+        String report = buildReport(totalLines, validRecords, invalidRecords,
+                infoCount, warnCount, errorCount,
+                serviceStats, serviceCount,
+                incidents, incidentCount,
+                requestStats, requestCount);
+
+        System.out.print(report);
+
+        try {
+            PrintWriter reportWriter = new PrintWriter(new FileWriter(outputFilename));
+            reportWriter.print(report);
+            reportWriter.close();
+        } catch (IOException e) {
+            System.err.println("Error: could not write report to '" + outputFilename + "'");
+        }
+    }
+
+    // Q9: builds the full report text, applying the 5 required
+    // deviations from format.txt's base structure
+    private static String buildReport(int totalLines, int validRecords, int invalidRecords,
+            int infoCount, int warnCount, int errorCount,
+            ServiceStats[] serviceStats, int serviceCount,
+            Incident[] incidents, int incidentCount,
+            RequestStats[] requestStats, int requestCount) {
+
+        String report = "";
+        report += "========================\n";
+        report += "LOGFORGE INCIDENT REPORT\n";
+        report += "========================\n";
+        report += "\n";
+        report += "\n";
+        report += "1. SUMMARY\n";
+        report += "----------\n";
+        report += "\n";
+        report += "Total lines: " + totalLines + "\n";
+        report += "Valid records: " + validRecords + "\n";
+        report += "Invalid records: " + invalidRecords + "\n";
+        report += "\n";
+        report += "ERROR: " + errorCount + "\n";
+        report += "INFO: " + infoCount + "\n";
+        report += "WARN: " + warnCount + "\n";
+        report += "\n";
+        report += "\n";
+        report += "2. SERVICE STATISTICS\n";
+        report += "---------------------\n";
+        report += "\n";
+
         for (int i = 0; i < serviceCount; i++) {
             ServiceStats s = serviceStats[i];
-            System.out.println(s.getServiceName() + " total=" + s.getTotal()
-                    + " errors=" + s.getErrorCount()
-                    + " errorRate=" + s.getErrorRatePercentString());
+            report += "Service: " + s.getServiceName() + "\n";
+            report += "Total: " + s.getTotal() + "\n";
+            report += "INFO: " + s.getInfoCount() + "\n";
+            report += "WARN: " + s.getWarnCount() + "\n";
+            report += "ERROR: " + s.getErrorCount() + "\n";
+            report += "Error Rate: " + s.getErrorRatePercentString5() + "\n";
+            report += "\n";
         }
 
-        System.out.println();
-        System.out.println("REQUEST STATISTICS");
-        for (int i = 0; i < requestCount; i++) {
-            RequestStats r = requestStats[i];
-            String status = r.isFailed() ? "FAILED" : "SUCCESS";
-            System.out.println("Request " + r.getRequestId() + ": " + status);
-            System.out.println("Records: " + r.getTotalRecords());
-            System.out.println("Errors: " + r.getErrorCount());
-            System.out.println("Services: " + r.getServicesString());
-            System.out.println();
-        }
+        report += "\n";
+        report += "3. INCIDENTS\n";
+        report += "------------\n";
+        report += "\n";
 
-        System.out.println("INCIDENTS");
         if (incidentCount == 0) {
-            System.out.println("No incidents detected.");
+            report += "No incidents detected.\n";
         } else {
             for (int i = 0; i < incidentCount; i++) {
                 Incident inc = incidents[i];
-                System.out.println("Service: " + inc.getServiceName());
-                System.out.println("First Error: " + inc.getFirstErrorTimestamp());
-                System.out.println("Last Error: " + inc.getLastErrorTimestamp());
-                System.out.println();
+                report += "Service: " + inc.getServiceName() + "\n";
+                report += "First Error: " + extractTimeOnly(inc.getFirstErrorTimestamp()) + "\n";
+                report += "Last Error: " + extractTimeOnly(inc.getLastErrorTimestamp()) + "\n";
+                report += "\n";
             }
         }
+
+        report += "\n";
+        report += "4. REQUEST STATISTICS\n";
+        report += "---------------------\n";
+        report += "\n";
+
+        for (int i = 0; i < requestCount; i++) {
+            RequestStats r = requestStats[i];
+            String status = r.isFailed() ? "FAILED" : "SUCCESS";
+            report += "Request " + r.getRequestId() + " : " + status + "\n";
+            report += "Records: " + r.getTotalRecords() + "\n";
+            report += "Errors: " + r.getErrorCount() + "\n";
+            report += "Services: " + r.getServicesString() + "\n";
+            report += "\n";
+        }
+
+        report += "\n";
+        report += "eod\n";
+        return report;
+    }
+
+    // extracts just the HH:MM:SS portion from a full 19-char timestamp
+    private static String extractTimeOnly(String timestamp) {
+        return timestamp.substring(11);
     }
 
     private static RequestStats[] growRequestArray(RequestStats[] array) {

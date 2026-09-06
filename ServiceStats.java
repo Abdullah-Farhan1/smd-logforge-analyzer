@@ -60,4 +60,21 @@ public class ServiceStats {
         String fracStr = (fracPart < 10) ? ("0" + fracPart) : ("" + fracPart);
         return wholePart + "." + fracStr + "%";
     }
+    // Q9: error rate at 5 decimal places, computed independently from
+    // raw counts (not derived from the 2-decimal sort key) to avoid
+    // compounding rounding error
+    public String getErrorRatePercentString5() {
+        long scaled = ((long) errorCount * 20000000L + total) / ((long) total * 2L);
+        long wholePart = scaled / 100000L;
+        long fracPart = scaled % 100000L;
+        return wholePart + "." + padFiveDigits(fracPart) + "%";
+    }
+
+    private static String padFiveDigits(long value) {
+        String s = "" + value;
+        while (s.length() < 5) {
+            s = "0" + s;
+        }
+        return s;
+    }
 }
